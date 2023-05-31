@@ -43,15 +43,32 @@ const authorizeUser = async (socket, next) => {
         console.log("not real user!");
         next(new Error("Authorization failed!"));
     } else {
+        
         socket.user = { ...socket.request.session.user };
+        console.log(socket.user);
+        socket.join(socket.user.userId);
         await redisClient.hset(
             `userid:${socket.user.username}`,
             "userId",
             socket.user.userId
-        );
-        const friendsList = await redisClient.lrange(`friends:${socket.user.username}`, 0, -1)
+          );
+          console.log(socket.user.userId);
+          await redisClient.hset(
+            `userid:${socket.user.username}`,
+            "connected",
+            true
+          );
+        const redisFriendsList = await redisClient.lrange(`friends:${socket.user.username}`, 0, -1)
+
+        const friendsList = await compatibilityFriendsList(redisFriendsList);
+        const friendRooms = friendsList.map(friend => friend.userId);
+
+        if (friendRooms.length > 0) {
+            socket.to(friendRooms).emit("connected", true, socket.user.username);
+        }
+        console.log(friendsList);
         socket.emit("friends", friendsList);
-        
+
         //console.log("authorized user ",socket.user.userId);
         next();
     };
@@ -62,11 +79,12 @@ const addFriend = async (socket, friendName, callback) => {
         callback({ done: false, errorMessage: "Cannot befriend yourself" });
         return;
     }
-
-    const friendUserId = await redisClient.hget(`userid:${friendName}`, "userId");
+    
+    const friend = await redisClient.hgetall(`userid:${friendName}`);
+    console.log(friend+ " den her");
     const existingFriends = await redisClient.lrange(`friends:${socket.user.username}`, 0, -1)
 
-    if (!friendUserId) {
+    if (!friend.userId) {
         callback({ done: false, errorMessage: "Invalid User" });
         return;
     }
@@ -75,9 +93,37 @@ const addFriend = async (socket, friendName, callback) => {
         return;
     }
 
-    await redisClient.lpush(`friends:${socket.user.username}`, friendName);
-    callback({ done: true });
+    await redisClient.lpush(`friends:${socket.user.username}`, [friendName, friend.userId].join("."));
+
+    const newFriend = {
+        username: friendName,
+        userId: friend.userId,
+        connected: friend.connected,
+    };
+    callback({ done: true , newFriend});
 
 }
 
-module.exports = { sessionMiddleware, compatibility, authorizeUser, addFriend, corsServerConfig };
+const onDisconnect = async (socket) => {
+    await redisClient.hset(
+        `userid:${socket.user.username}`,
+        "connected", false
+    );
+    const friendsList = await redisClient.lrange(`friends:${socket.user.username}`, 0, -1);
+    const friendRooms = await compatibilityFriendsList(friendsList)
+        .then(friends => friends.map(friend => friend.userId));
+    socket.to(friendRooms).emit("connected", false, socket.user.username);
+}
+
+const compatibilityFriendsList = async friendsList => {
+    const newFriendsList = [];
+    for (let friend of friendsList) {
+
+        const redisFriend = friend.split(".");
+        const connectedStatus = await redisClient.hget(`userid:${redisFriend[0]}`, "connected");
+        newFriendsList.push({ username: redisFriend[0], userId: redisFriend[1], connected: connectedStatus });
+    }
+    return newFriendsList;
+}
+
+module.exports = { sessionMiddleware, compatibility, authorizeUser, addFriend, onDisconnect, corsServerConfig };

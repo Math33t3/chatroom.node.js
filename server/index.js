@@ -7,7 +7,7 @@ const cors = require("cors");
 const authRouter = require("./routers/authRouter");
 const db = require("./database/connection");
 const bcrypt = require("bcrypt");
-const { sessionMiddleware, compatibility,authorizeUser, addFriend, corsServerConfig } = require("./controllers/serverController");
+const { sessionMiddleware, compatibility,authorizeUser, onDisconnect ,addFriend, corsServerConfig } = require("./controllers/serverController");
 
 
 require("dotenv").config();
@@ -34,10 +34,9 @@ app.get("/", (req, res) => {
 io.use(compatibility(sessionMiddleware));
 io.use(authorizeUser);
 io.on("connect", socket => {
-    console.log(socket.user.userId);
-    console.log(socket.request.session.user.username);
-
+    
     socket.on("addFriend", (friendName, callback) => {addFriend(socket, friendName, callback)});
+    socket.on("disconnect", () => onDisconnect(socket))
 })
 
 server.listen(PORT, () => {
